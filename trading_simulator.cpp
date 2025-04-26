@@ -7,39 +7,42 @@
 #include <cmath>
 #include <thread>
 #include <mutex>
+#include <unordered_map>
 
-// Structure to store market data
 struct MarketData {
     std::string date;
+    std::string symbol;
     double close_price;
 };
 
-// Mutex for thread-safe output
 std::mutex cout_mutex;
 
-// Function to load CSV data
-std::vector<MarketData> loadCSV(const std::string& filename) {
-    std::vector<MarketData> data;
+// Load CSV with multiple symbols
+std::unordered_map<std::string, std::vector<MarketData>> loadCSV(const std::string& filename) {
+    std::unordered_map<std::string, std::vector<MarketData>> data_by_symbol;
     std::ifstream file(filename);
     if (!file.is_open()) {
         throw std::runtime_error("Error: Cannot open file " + filename);
     }
 
-    std::string line, date;
-    double close_price;
-    // Skip the header
-    std::getline(file, line);
+    std::string line;
+    std::getline(file, line); // Skip header
+
     while (std::getline(file, line)) {
         std::istringstream ss(line);
-        if (std::getline(ss, date, ',') && ss >> close_price) {
-            data.push_back({date, close_price});
+        std::string date, symbol, price_str;
+        if (std::getline(ss, date, ',') && std::getline(ss, symbol, ',') && std::getline(ss, price_str, ',')) {
+            try {
+                double price = std::stod(price_str);
+                data_by_symbol[symbol].push_back({date, symbol, price});
+            } catch (...) {
+                continue; // Skip invalid lines
+            }
         }
     }
-    file.close();
-    return data;
+    return data_by_symbol;
 }
 
-// Calculate Simple Moving Average (SMA)
 std::vector<double> calculateSMA(const std::vector<double>& prices, int window_size) {
     std::vector<double> sma;
     double sum = 0;
@@ -55,7 +58,6 @@ std::vector<double> calculateSMA(const std::vector<double>& prices, int window_s
     return sma;
 }
 
-// Backtest SMA Strategy
 double backtestSMA(const std::vector<MarketData>& data, int short_window, int long_window) {
     std::vector<double> prices;
     for (const auto& entry : data) {
@@ -63,7 +65,7 @@ double backtestSMA(const std::vector<MarketData>& data, int short_window, int lo
     }
 
     if (short_window >= long_window || long_window >= prices.size()) {
-        return 0.0; // Invalid parameter combination
+        return 0.0;
     }
 
     auto short_sma = calculateSMA(prices, short_window);
@@ -87,31 +89,29 @@ double backtestSMA(const std::vector<MarketData>& data, int short_window, int lo
     return ((balance - initial_balance) / initial_balance) * 100;
 }
 
-// Thread-safe backtest runner
-void runBacktest(const std::vector<MarketData>& data, int short_window, int long_window) {
+// Threaded backtest for a specific symbol
+void runBacktest(const std::string& symbol, const std::vector<MarketData>& data, int short_window, int long_window) {
     double roi = backtestSMA(data, short_window, long_window);
     std::lock_guard<std::mutex> lock(cout_mutex);
-    std::cout << "[Short=" << short_window << ", Long=" << long_window << "] ROI: " << roi << "%\n";
+    std::cout << "[Symbol=" << symbol << ", Short=" << short_window << ", Long=" << long_window
+              << "] ROI: " << roi << "%\n";
 }
 
 int main() {
     try {
-        auto data = loadCSV("data.csv");
+        auto data_by_symbol = loadCSV("data.csv");
+
+        int short_window = 5;
+        int long_window = 10;
 
         std::vector<std::thread> threads;
 
-        // Try multiple SMA window combinations in parallel
-        for (int short_w = 5; short_w <= 15; ++short_w) {
-            for (int long_w = 30; long_w <= 60; long_w += 10) {
-                threads.emplace_back(runBacktest, std::ref(data), short_w, long_w);
-            }
+        for (const auto& [symbol, data] : data_by_symbol) {
+            threads.emplace_back(runBacktest, symbol, data, short_window, long_window);
         }
 
-        // Join all threads
         for (auto& t : threads) {
-            if (t.joinable()) {
-                t.join();
-            }
+            if (t.joinable()) t.join();
         }
 
     } catch (const std::exception& ex) {
