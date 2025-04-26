@@ -5,12 +5,17 @@
 #include <string>
 #include <numeric>
 #include <cmath>
+#include <thread>
+#include <mutex>
 
 // Structure to store market data
 struct MarketData {
     std::string date;
     double close_price;
 };
+
+// Mutex for thread-safe output
+std::mutex cout_mutex;
 
 // Function to load CSV data
 std::vector<MarketData> loadCSV(const std::string& filename) {
@@ -57,48 +62,58 @@ double backtestSMA(const std::vector<MarketData>& data, int short_window, int lo
         prices.push_back(entry.close_price);
     }
 
+    if (short_window >= long_window || long_window >= prices.size()) {
+        return 0.0; // Invalid parameter combination
+    }
+
     auto short_sma = calculateSMA(prices, short_window);
     auto long_sma = calculateSMA(prices, long_window);
 
-    double initial_balance = 10000; // Initial capital in USD
+    double initial_balance = 10000;
     double balance = initial_balance;
-    double position = 0; // Number of shares held
+    double position = 0;
 
     for (size_t i = long_window - 1; i < prices.size(); ++i) {
         if (short_sma[i - (long_window - 1)] > long_sma[i - (long_window - 1)] && position == 0) {
-            // Buy signal
             position = balance / prices[i];
             balance = 0;
         } else if (short_sma[i - (long_window - 1)] < long_sma[i - (long_window - 1)] && position > 0) {
-            // Sell signal
             balance += position * prices[i];
             position = 0;
         }
     }
 
-    // Final balance after selling any remaining position
     balance += position * prices.back();
-    double roi = ((balance - initial_balance) / initial_balance) * 100;
-    return roi;
+    return ((balance - initial_balance) / initial_balance) * 100;
+}
+
+// Thread-safe backtest runner
+void runBacktest(const std::vector<MarketData>& data, int short_window, int long_window) {
+    double roi = backtestSMA(data, short_window, long_window);
+    std::lock_guard<std::mutex> lock(cout_mutex);
+    std::cout << "[Short=" << short_window << ", Long=" << long_window << "] ROI: " << roi << "%\n";
 }
 
 int main() {
     try {
-        // Load historical data
         auto data = loadCSV("data.csv");
 
-        // Parameters for the strategy
-        int short_window = 10;
-        int long_window = 50;
+        std::vector<std::thread> threads;
 
-        // Backtest the strategy
-        double roi = backtestSMA(data, short_window, long_window);
+        // Try multiple SMA window combinations in parallel
+        for (int short_w = 5; short_w <= 15; ++short_w) {
+            for (int long_w = 30; long_w <= 60; long_w += 10) {
+                threads.emplace_back(runBacktest, std::ref(data), short_w, long_w);
+            }
+        }
 
-        // Display results
-        std::cout << "SMA Strategy Backtest Results:\n";
-        std::cout << "Short Window: " << short_window << " days\n";
-        std::cout << "Long Window: " << long_window << " days\n";
-        std::cout << "Return on Investment (ROI): " << roi << "%\n";
+        // Join all threads
+        for (auto& t : threads) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+
     } catch (const std::exception& ex) {
         std::cerr << ex.what() << std::endl;
     }
