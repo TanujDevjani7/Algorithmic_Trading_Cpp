@@ -64,30 +64,53 @@ double backtestSMA(const std::vector<MarketData>& data, int short_window, int lo
         prices.push_back(entry.close_price);
     }
 
-    if (short_window >= long_window || long_window >= prices.size()) {
-        return 0.0;
-    }
-
     auto short_sma = calculateSMA(prices, short_window);
     auto long_sma = calculateSMA(prices, long_window);
 
-    double initial_balance = 10000;
-    double balance = initial_balance;
-    double position = 0;
+    std::cout << "short_sma size: " << short_sma.size() << "\n";
+    std::cout << "long_sma size: " << long_sma.size() << "\n";
+    std::cout << "prices size: " << prices.size() << "\n";
 
-    for (size_t i = long_window - 1; i < prices.size(); ++i) {
-        if (short_sma[i - (long_window - 1)] > long_sma[i - (long_window - 1)] && position == 0) {
-            position = balance / prices[i];
+    double initial_balance = 10000; // Initial capital
+    double balance = initial_balance;
+    double position = 0; // Shares held
+
+    size_t start = std::max(short_window, long_window) - 1;
+
+    for (size_t i = start; i < prices.size(); ++i) {
+        size_t short_idx = i - (short_window - 1);
+        size_t long_idx = i - (long_window - 1);
+
+        if (short_idx >= short_sma.size() || long_idx >= long_sma.size()) continue;
+
+        double short_val = short_sma[short_idx];
+        double long_val = long_sma[long_idx];
+        double price = prices[i];
+
+        std::cout << "Date: " << data[i].date
+                  << " | Price: " << price
+                  << " | Short SMA: " << short_val
+                  << " | Long SMA: " << long_val << "\n";
+
+        if (short_val > long_val && position == 0) {
+            // Buy
+            std::cout << "  → Buy Signal at " << price << "\n";
+            position = balance / price;
             balance = 0;
-        } else if (short_sma[i - (long_window - 1)] < long_sma[i - (long_window - 1)] && position > 0) {
-            balance += position * prices[i];
+        } else if (short_val < long_val && position > 0) {
+            // Sell
+            std::cout << "  → Sell Signal at " << price << "\n";
+            balance += position * price;
             position = 0;
         }
     }
 
+    // Final sell if holding a position
     balance += position * prices.back();
-    return ((balance - initial_balance) / initial_balance) * 100;
+    double roi = ((balance - initial_balance) / initial_balance) * 100;
+    return roi;
 }
+
 
 // Threaded backtest for a specific symbol
 void runBacktest(const std::string& symbol, const std::vector<MarketData>& data, int short_window, int long_window) {
@@ -101,8 +124,8 @@ int main() {
     try {
         auto data_by_symbol = loadCSV("data.csv");
 
-        int short_window = 5;
-        int long_window = 10;
+        int short_window = 3;
+        int long_window = 5;
 
         std::vector<std::thread> threads;
 
